@@ -1,5 +1,3 @@
-%%writefile app.py
-
 import pandas as pd
 import streamlit as st
 
@@ -52,9 +50,7 @@ def find_url_column(df: pd.DataFrame):
 def load_data():
     df = pd.read_csv(ENRICHED)
 
-    # IMPORTANT:
-    # Your pipeline created home_i/home_j based on df order at runtime.
-    # In the app we recreate that same "home_id" by row order.
+    # Recreate home_id exactly the same way as the pipeline
     df = df.reset_index(drop=True).reset_index().rename(columns={"index": "home_id"})
 
     # Fix URL column
@@ -66,9 +62,9 @@ def load_data():
 
     top = pd.read_csv(TOP)
 
-    # Ensure expected columns exist
     needed_df_cols = {"home_id", "full_address"}
     needed_top_cols = {"home_i", "home_j", "similarity_pct"}
+
     if not needed_df_cols.issubset(set(df.columns)):
         raise ValueError(f"{ENRICHED} missing columns: {needed_df_cols - set(df.columns)}")
     if not needed_top_cols.issubset(set(top.columns)):
@@ -142,7 +138,7 @@ if matches.empty:
 # Apply filters
 matches = matches[matches["similarity_pct"] >= float(min_similarity)]
 
-# Join match details (home_j)
+# Join match details
 match_details = matches.merge(
     df.add_prefix("m_"),
     left_on="home_j",
@@ -150,7 +146,7 @@ match_details = matches.merge(
     how="left"
 )
 
-# Optional batch filter on matched homes
+# Optional batch filter
 if batch_filter and "m_batch" in match_details.columns:
     match_details = match_details[match_details["m_batch"].isin(batch_filter)]
 
@@ -174,25 +170,21 @@ out_cols = [
 ]
 out_cols = [c for c in out_cols if c in match_details.columns]
 
-# Format
 table = match_details[out_cols].copy()
 if "similarity_pct" in table.columns:
     table["similarity_pct"] = table["similarity_pct"].map(lambda x: round(float(x), 2))
 
-# Clean blanks
 table = table.replace({pd.NA: "", None: "", "None": "", "nan": ""})
 
-# Make URL clickable
 if "m_redfin_url" in table.columns:
     table["m_redfin_url"] = table["m_redfin_url"].apply(clean_url_value)
     table["m_redfin_url"] = table["m_redfin_url"].apply(
         lambda x: f'<a href="{x}" target="_blank">Open Redfin</a>' if x else ""
     )
 
-# Show as HTML so links are clickable
 st.write(table.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-# Quick download
+# Download CSV
 download_table = match_details[out_cols].copy()
 if "similarity_pct" in download_table.columns:
     download_table["similarity_pct"] = download_table["similarity_pct"].map(lambda x: round(float(x), 2))
