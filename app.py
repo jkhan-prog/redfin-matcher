@@ -15,6 +15,37 @@ def clean_url(x):
         return ""
     return s
 
+def clean_text(x):
+    if pd.isna(x):
+        return ""
+    s = str(x).strip()
+    if s.lower() in {"nan", "none", "null"}:
+        return ""
+    return s
+
+def make_physical_address(row, prefix=""):
+    street = clean_text(row.get(f"{prefix}street", ""))
+    city = clean_text(row.get(f"{prefix}city", ""))
+    state = clean_text(row.get(f"{prefix}state", ""))
+    zip_code = clean_text(row.get(f"{prefix}zip", ""))
+
+    parts = []
+    if street:
+        parts.append(street)
+
+    city_state_zip = ", ".join([x for x in [city, state] if x])
+    if zip_code:
+        if city_state_zip:
+            city_state_zip = f"{city_state_zip} {zip_code}"
+        else:
+            city_state_zip = zip_code
+
+    if city_state_zip:
+        parts.append(city_state_zip)
+
+    physical = ", ".join(parts).strip(", ")
+    return physical
+
 # ================================
 # Upload files
 # ================================
@@ -42,8 +73,7 @@ def load_data(enriched_file, top_file):
 
     top = pd.read_csv(top_file)
 
-    # Validation
-    needed_df_cols = {"home_id", "full_address"}
+    needed_df_cols = {"home_id"}
     needed_top_cols = {"home_i", "home_j", "similarity_pct"}
 
     if not needed_df_cols.issubset(df.columns):
@@ -66,10 +96,14 @@ except Exception as e:
     st.stop()
 
 # ================================
-# Clean addresses
+# Build physical address
 # ================================
-df["full_address"] = df["full_address"].fillna("").astype(str).str.strip()
-df_nonempty = df[df["full_address"] != ""].copy()
+if all(c in df.columns for c in ["street", "city", "state", "zip"]):
+    df["display_address"] = df.apply(lambda r: make_physical_address(r), axis=1)
+else:
+    df["display_address"] = df.get("full_address", "").fillna("").astype(str).str.strip()
+
+df_nonempty = df[df["display_address"] != ""].copy()
 
 if df_nonempty.empty:
     st.warning("No valid addresses found.")
@@ -92,9 +126,9 @@ top_n = st.sidebar.slider("Top N matches", 1, 50, 10)
 # ================================
 # Select property
 # ================================
-addr = st.selectbox("Select an address", df_nonempty["full_address"])
+addr = st.selectbox("Select an address", df_nonempty["display_address"])
 
-sel_row = df_nonempty[df_nonempty["full_address"] == addr].iloc[0]
+sel_row = df_nonempty[df_nonempty["display_address"] == addr].iloc[0]
 sel_id = int(sel_row["home_id"])
 
 # ================================
@@ -106,8 +140,8 @@ left, right = st.columns([2, 3])
 
 with left:
     cols = [
-        "full_address", "batch", "year_built", "sqft", "stories",
-        "beds", "baths", "home_type", "parking",
+        "display_address", "batch", "year_built", "sqft", "lot_size",
+        "stories", "beds", "baths", "home_type", "parking",
         "pct_black_bg", "pct_white_bg"
     ]
     cols = [c for c in cols if c in df.columns]
@@ -131,7 +165,6 @@ if matches.empty:
     st.warning("No matches found.")
     st.stop()
 
-# Apply filters
 matches = matches[matches["similarity_pct"] >= min_similarity]
 
 match_details = matches.merge(
@@ -141,6 +174,14 @@ match_details = matches.merge(
     how="left"
 )
 
+# Build matched physical address
+if all(c in match_details.columns for c in ["m_street", "m_city", "m_state", "m_zip"]):
+    match_details["m_display_address"] = match_details.apply(
+        lambda r: make_physical_address(r, prefix="m_"), axis=1
+    )
+else:
+    match_details["m_display_address"] = match_details.get("m_full_address", "").fillna("").astype(str).str.strip()
+
 if batch_filter and "m_batch" in match_details.columns:
     match_details = match_details[match_details["m_batch"].isin(batch_filter)]
 
@@ -149,10 +190,11 @@ match_details = match_details.sort_values("similarity_pct", ascending=False).hea
 # Display
 cols = [
     "similarity_pct",
-    "m_full_address",
+    "m_display_address",
     "m_batch",
     "m_year_built",
     "m_sqft",
+    "m_lot_size",
     "m_stories",
     "m_beds",
     "m_baths",
@@ -167,7 +209,6 @@ cols = [c for c in cols if c in match_details.columns]
 table = match_details[cols].copy()
 table["similarity_pct"] = table["similarity_pct"].round(2)
 
-# Make URL clickable
 if "m_redfin_url" in table.columns:
     table["m_redfin_url"] = table["m_redfin_url"].apply(clean_url)
     table["m_redfin_url"] = table["m_redfin_url"].apply(
